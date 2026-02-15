@@ -1,0 +1,4 @@
+banana e martelo nao sao anagramas (iteracoes=7)
+amor e roma sao anagramas. (iteracoes=12)
+bora e bill nao sao anagramas (iteracoes=7)
+TOTAL DE ITERACOES 26

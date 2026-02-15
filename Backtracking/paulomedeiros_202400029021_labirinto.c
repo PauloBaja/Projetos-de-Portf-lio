@@ -183,7 +183,6 @@ int main(int argc, char *argv[]) {
         mz->xmax = rx;
         mz->ymax = ry;
 
-        int foundX = 0;
         char aux;
 
         for (int j = 0; j < rx; j++) {
@@ -193,7 +192,6 @@ int main(int argc, char *argv[]) {
                 else {
                     mz->coordinates[j][k] = 0;
                     if (aux == 'X') {
-                        foundX = 1;
                         bot->cx = j;
                         bot->cy = k;
                         mz->x0 = j;
