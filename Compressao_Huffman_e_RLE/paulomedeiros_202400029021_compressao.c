@@ -1,6 +1,9 @@
+#define _POSIX_C_SOURCE 199309L
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <stdint.h>
 
 typedef struct no {
     int F;
@@ -13,15 +16,11 @@ typedef struct {
     unsigned char tam;
 } codigo;
 
-
-
 typedef struct {
     no **heap;
     int tamanho;
     int capacidade;
 } filaPrioridade;
-
-
 
 no *criar_no(unsigned char byte, int freq) {
     no *n = (no *)malloc(sizeof(no));
@@ -52,7 +51,6 @@ void heapifyMin(no **heap, int fim, int i) {
         heapifyMin(heap, fim, menor);
     }
 }
-
 
 filaPrioridade *fp_criar(int *freq) {
     filaPrioridade *fp = malloc(sizeof(filaPrioridade));
@@ -96,7 +94,6 @@ void fp_liberar(filaPrioridade *fp) {
     free(fp);
 }
 
-
 no *construir_arvore(int *freq) {
     filaPrioridade *fp = fp_criar(freq);
 
@@ -138,12 +135,12 @@ void gerar_codigos(no *r, unsigned long long bits, unsigned char tam, codigo *ta
     gerar_codigos(r->D, (bits << 1) | 1, tam + 1, tab);
 }
 
-
 typedef struct {
     unsigned char *data;
     int capacity;
     int byte_pos;
     int bit_pos;
+    uint64_t acc;
 } BitStream;
 
 BitStream *bitstream_criar(int cap) {
@@ -152,6 +149,7 @@ BitStream *bitstream_criar(int cap) {
     bs->capacity = cap;
     bs->byte_pos = 0;
     bs->bit_pos = 0;
+    bs->acc = 0;
     return bs;
 }
 
@@ -161,28 +159,32 @@ void bitstream_free(BitStream *bs) {
 }
 
 void bitstream_write(BitStream *bs, unsigned long long bits, int tam) {
-    for (int i = tam - 1; i >= 0; i--) {
-        unsigned char bit = (bits >> i) & 1;
-        if (bs->bit_pos == 0)
-            bs->data[bs->byte_pos] = 0;
-        bs->data[bs->byte_pos] |= bit << (7 - bs->bit_pos);
-        bs->bit_pos++;
-        if (bs->bit_pos == 8) {
-            bs->bit_pos = 0;
-            bs->byte_pos++;
-            if (bs->byte_pos >= bs->capacity) {
-                bs->capacity *= 2;
-                bs->data = realloc(bs->data, bs->capacity);
-            }
+    bs->acc = (bs->acc << tam) | bits;
+    bs->bit_pos += tam;
+
+    while (bs->bit_pos >= 8) {
+        bs->bit_pos -= 8;
+        unsigned char byte = (bs->acc >> bs->bit_pos) & 0xFF;
+        bs->data[bs->byte_pos++] = byte;
+
+        if (bs->byte_pos >= bs->capacity) {
+            bs->capacity *= 2;
+            bs->data = realloc(bs->data, bs->capacity);
         }
     }
 }
 
-int bitstream_tamanho(BitStream *bs) {
-    return bs->byte_pos + (bs->bit_pos > 0 ? 1 : 0);
+void bitstream_flush(BitStream *bs) {
+    if (bs->bit_pos > 0) {
+        unsigned char byte = (bs->acc << (8 - bs->bit_pos)) & 0xFF;
+        bs->data[bs->byte_pos++] = byte;
+        bs->bit_pos = 0;
+    }
 }
 
-
+int bitstream_tamanho(BitStream *bs) {
+    return bs->byte_pos;
+}
 
 int rle(unsigned char *e, int n, unsigned char *out) {
     int out_idx = 0, count = 1;
@@ -198,25 +200,18 @@ int rle(unsigned char *e, int n, unsigned char *out) {
     return out_idx;
 }
 
-
-
 void print_hex_bits(FILE *f, unsigned char *v, int n, int ultimo_bits) {
     static const char hex[] = "0123456789ABCDEF";
-    for (int i = 0; i < n - 1; i++) {
-        fputc(hex[v[i] >> 4], f);
-        fputc(hex[v[i] & 0x0F], f);
-    }
-    if (ultimo_bits > 0) {
-        unsigned char last = v[n - 1] >> (8 - ultimo_bits);
-        if (ultimo_bits <= 4)
-            fputc(hex[last], f);
-        else {
-            fputc(hex[last >> 4], f);
-            fputc(hex[last & 0x0F], f);
+
+    for (int i = 0; i < n; i++) {
+        unsigned char b = v[i];
+        if (i == n - 1 && ultimo_bits < 8) {
+            b &= (0xFF << (8 - ultimo_bits));
         }
+        fputc(hex[b >> 4], f);
+        fputc(hex[b & 0x0F], f);
     }
 }
-
 
 void liberar_arvore(no *r) {
     if (r) {
@@ -225,8 +220,6 @@ void liberar_arvore(no *r) {
         free(r);
     }
 }
-
-
 
 int main(int argc, char *argv[]) {
     if (argc != 3) {
@@ -245,11 +238,16 @@ int main(int argc, char *argv[]) {
     int N;
     fscanf(entrada, "%d", &N);
 
+    struct timespec start, end;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+
     for (int l = 0; l < N; l++) {
         int qtd;
         fscanf(entrada, "%d", &qtd);
 
         unsigned char *dados = malloc(qtd);
+        unsigned char *rle_out = malloc(qtd * 2);
+
         int freq[256] = {0};
 
         for (int i = 0; i < qtd; i++) {
@@ -259,19 +257,21 @@ int main(int argc, char *argv[]) {
             freq[v]++;
         }
 
-        unsigned char rle_out[20000];
         int rle_tam = rle(dados, qtd, rle_out);
 
         no *raiz = construir_arvore(freq);
         codigo tab[256] = {{0,0}};
         if (raiz) gerar_codigos(raiz, 0, 0, tab);
 
-        BitStream *bs = bitstream_criar(20000);
+        BitStream *bs = bitstream_criar(qtd * 2);
+
         for (int i = 0; i < qtd; i++)
             bitstream_write(bs, tab[dados[i]].bits, tab[dados[i]].tam);
 
-        int huf_tam = bitstream_tamanho(bs);
         int ultimo_bits = (bs->bit_pos == 0) ? 8 : bs->bit_pos;
+        bitstream_flush(bs);
+
+        int huf_tam = bitstream_tamanho(bs);
 
         float pr = (float)rle_tam / qtd * 100.0f;
         float ph = (float)huf_tam / qtd * 100.0f;
@@ -279,19 +279,29 @@ int main(int argc, char *argv[]) {
         if (huf_tam <= rle_tam) {
             fprintf(saida, "%d->HUF(%.2f%%)=", l, ph);
             print_hex_bits(saida, bs->data, huf_tam, ultimo_bits);
+
+            if (huf_tam == rle_tam) {
+                fprintf(saida, "\n%d->RLE(%.2f%%)=", l, pr);
+                for (int i = 0; i < rle_tam; i++)
+                    fprintf(saida, "%02X", rle_out[i]);
+            }
         } else {
             fprintf(saida, "%d->RLE(%.2f%%)=", l, pr);
             for (int i = 0; i < rle_tam; i++)
                 fprintf(saida, "%02X", rle_out[i]);
         }
-        fprintf(saida, "\n");
+        if(l!=N-1) fprintf(saida, "\n");
 
-        // bitstream_free(bs);
-        // liberar_arvore(raiz);
-        // free(dados);
+        liberar_arvore(raiz);
+        bitstream_free(bs);
+        free(dados);
+        free(rle_out);
     }
 
-    // fclose(entrada);
-    // fclose(saida);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    double tempo_gasto = (end.tv_sec - start.tv_sec) +
+                         (end.tv_nsec - start.tv_nsec) / 1e9;
+
+    printf("Tempo total de execução: %.6f segundos\n", tempo_gasto);
     return 0;
 }
